@@ -26,6 +26,7 @@ class TestRunner:
         cls.log_level = log_level
         cls.concur_test = test_run_dict["nonDisruptive"]
         cls.non_concur_test = test_run_dict["disruptive"]
+        cls.excluded_tests = excluded_tests
         cls.threadList = []
         cls.test_results = {}
         cls._prepare_thread_tests()
@@ -34,7 +35,7 @@ class TestRunner:
     def run_tests(cls):
         """
         The non-disruptive tests are invoked followed by the disruptive
-        tests.
+        tests and excluded tests are displayed in the end.
         """
         for test_thread in cls.threadList:
             test_thread.start()
@@ -49,6 +50,13 @@ class TestRunner:
 
         for test in cls.non_concur_test:
             cls._run_test(test, thread_flag)
+
+        if len(cls.excluded_tests) > 0:
+            print("Excluded tests: " + str(len(cls.excluded_tests)))
+            for test in cls.excluded_tests:
+                print(Fore.YELLOW + test)
+
+            print(Style.RESET_ALL)
 
         return cls.test_results
 

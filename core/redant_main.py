@@ -15,6 +15,7 @@ from test_runner import TestRunner
 from result_handler import ResultHandler
 from environ import environ
 
+
 def pars_args():
     """
     Function to handle command line parsing for the redant.
@@ -62,10 +63,13 @@ def main():
     param_obj = ParamsHandler(args.config_file)
 
     # Building the test list and obtaining the TC details.
+    excluded_tests = config_hashmap["excluded_tests"]
     test_cases_tuple = TestListBuilder.create_test_dict(args.test_dir,
+                                                        excluded_tests,
                                                         args.spec_test)
     test_cases_dict = test_cases_tuple[0]
     test_cases_component = test_cases_tuple[1]
+    excluded_tests = test_cases_tuple[2]
 
     # Creating log dirs.
     sys.path.insert(1, ".")
