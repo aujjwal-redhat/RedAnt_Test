@@ -5,7 +5,10 @@ from the test case.
 """
 
 import socket
+import re
+from time import sleep
 from common.ops.abstract_ops import AbstractOps
+
 
 class PeerOps(AbstractOps):
     """
@@ -14,7 +17,7 @@ class PeerOps(AbstractOps):
     and list of peers in the pool.
     """
 
-    def peer_probe(self, server: str, node: str):
+    def peer_probe(self, server: str, node: str) -> dict:
         """
         Adds a new peer to the cluster
         Args:
@@ -35,9 +38,14 @@ class PeerOps(AbstractOps):
 
         ret = self.execute_abstract_op_node(cmd, node)
 
+        ret_probe = self.wait_for_peers_to_connect(node, server)
+
+        if not ret_probe:
+            raise Exception(f"Peer {node} could not be connected.")
+
         return ret
 
-    def peer_detach(self, server: str, node: str, force: bool = False):
+    def peer_detach(self, server: str, node: str, force: bool = False) -> dict:
         """
         Detach the specified server.
         Args:
@@ -67,20 +75,28 @@ class PeerOps(AbstractOps):
 
         return ret
 
-    def peer_status(self, node: str):
+    def get_peer_status(self, node: str) -> list:
         """
         Checks the status of the peers
         Args:
             node (str): Node on which command has to be executed.
 
         Returns:
-            ret: A dictionary consisting
-                - Flag : Flag to check if connection failed
-                - msg : message
-                - error_msg: error message
-                - error_code: error code returned
-                - cmd : command that got executed
-                - node : node on which the command got executed
+            'peer'(list|dict): If single peer is present then dict is returned
+                                If multiple peers are present then list is returned
+            {
+                'uuid': '504fdf87-805a-4e8f-a266-b2f45d76958a',
+                'hostname': 'dhcp42-209.lab.eng.blr.redhat.com',
+                'hostnames': {
+                                'hostname': [
+                                                'dhcp1.1.lab.eng.blr.redhat.com',
+                                                '1.1.1.1'
+                                            ]
+                            },
+                'connected': '1',
+                'state': '3',
+                'stateStr': 'Peer in Cluster'
+            }
 
         """
 
@@ -88,33 +104,10 @@ class PeerOps(AbstractOps):
 
         ret = self.execute_abstract_op_node(cmd, node)
 
-        return ret
+        if ret['msg']['peerStatus'] is None:
+            return None
 
-    def pool_list(self, node: str) -> list:
-        """
-        Runs the command gluster pool list on `node`
-        Args:
-            node (str): Node on which command has to be executed.
-
-        Returns:
-            list : gives list of all the UUID's of all the connected peers
-        """
-
-        cmd = 'gluster --xml pool list'
-
-        ret = self.execute_abstract_op_node(cmd, node)
-
-        peer_list = []
-
-        peers = ret['msg']['peerStatus']['peer']
-        if not isinstance(peers, list):
-            peers = [peers]
-
-        for peer in peers:
-            if peer['connected'] == '1':
-                peer_list.append(peer['uuid'])
-
-        return peer_list
+        return ret['msg']['peerStatus']['peer']
 
     def nodes_from_pool_list(self, node: str) -> list:
         """
@@ -149,7 +142,7 @@ class PeerOps(AbstractOps):
             if 'hostname' in pool_list_data.keys():
                 nodes.append(pool_list_data['hostname'])
                 return nodes
-        except:
+        except Exception:
             pass
         for item in pool_list_data:
             nodes.append(item['hostname'])
@@ -169,13 +162,12 @@ class PeerOps(AbstractOps):
         cmd = 'gluster pool list --xml'
 
         ret = self.execute_abstract_op_node(cmd, node)
-
         peer_dict = ret['msg']
-
         pool_list = peer_dict['peerStatus']['peer']
+
         return pool_list
 
-    def convert_hosts_to_ip(self, node_list: list, node: str):
+    def convert_hosts_to_ip(self, node_list: list, node: str) -> list:
         """
         Redant framework works with IP addresses ( especially rexe )
         hence it makes sense to have a function to handle the conversion
@@ -183,13 +175,13 @@ class PeerOps(AbstractOps):
         a localhost term, that is replaced by the node value.
         Args:
             node_list (list): List of nodes obtained wherein the node can
-            be represented by ip or hostname.
+                              be represented by ip or hostname.
             node (str): The node which is represented by localhost. Has to
-            be replaced by corresponding IP.
+                        be replaced by corresponding IP.
         """
         if 'localhost' in node_list:
             node_list.remove('localhost')
-            node_list.append(node) 
+            node_list.append(node)
         for value in node_list:
             if not value.replace('.', '').isnumeric():
                 ip_val = socket.gethostbyname(value)
@@ -204,19 +196,19 @@ class PeerOps(AbstractOps):
         Args:
             node_list (list): All nodes which are to be part of the cluster.
         Returns:
-            Boolean value: Representing whether the cluster created failed
+            bool: Representing whether the cluster created failed
             or passed.
         """
         if len(node_list) in [0, 1]:
             return False
         desired_cluster_size = len(node_list)
-        main_cluster = self.convert_hosts_to_ip(self.nodes_from_pool_list(\
+        main_cluster = self.convert_hosts_to_ip(self.nodes_from_pool_list(
                                                 node_list[0]), node_list[0])
         main_cluster_size = len(main_cluster)
         if main_cluster_size == desired_cluster_size:
             return True
         for node in node_list:
-            temp_cluster = self.convert_hosts_to_ip(self.nodes_from_pool_list(\
+            temp_cluster = self.convert_hosts_to_ip(self.nodes_from_pool_list(
                                                     node), node)
             self.delete_cluster(temp_cluster)
         import random
@@ -225,9 +217,9 @@ class PeerOps(AbstractOps):
             if nd == node:
                 continue
             self.peer_probe(nd, node)
-        from time import sleep
+
         while len(self.nodes_from_pool_list(node_list[0])) != \
-              desired_cluster_size:
+                desired_cluster_size:
             sleep(1)
         return True
 
@@ -247,3 +239,74 @@ class PeerOps(AbstractOps):
             if nd == node:
                 continue
             self.peer_detach(nd, node)
+
+    def is_peer_connected(self, node: str, servers: list) -> bool:
+        """
+        Checks whether specified peers are in cluster and 'Connected' state.
+        Args:
+            node (str): Node from which peer probe has to be executed.
+            servers (str|list): A server|List of servers to be validated.
+        Returns
+            bool : True on success (peer in cluster and connected), False on
+                failure.
+        """
+        if not isinstance(servers, list):
+            servers = [servers]
+
+        if node in servers:
+            servers.remove(node)
+
+        peer_status_list = self.get_peer_status(node)
+        if peer_status_list is None:
+            return False
+        elif not isinstance(peer_status_list, list):
+            peer_status_list = [peer_status_list]
+
+        # Convert all hostnames to ip's
+        server_ips = []
+        for server in servers:
+            server_ips.append(socket.gethostbyname(server))
+
+        is_connected = True
+        for peer_stat in peer_status_list:
+            if socket.gethostbyname(peer_stat['hostname']) in server_ips:
+                if (re.match(r'([0-9a-f]{8})(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}',
+                             peer_stat['uuid'], re.I) is None):
+                    self.logger.error(
+                        f"Invalid UUID for the node '{peer_stat['hostname']}'")
+                    is_connected = False
+                if (peer_stat['stateStr'] != "Peer in Cluster" or
+                        peer_stat['connected'] != '1'):
+                    self.logger.error(
+                        f"Peer '{peer_stat['hostname']}' not in connected state")
+                    is_connected = False
+
+        if not is_connected:
+            return False
+
+        return True
+
+    def wait_for_peers_to_connect(self, node: str, servers: list, wait_timeout: int = 10) -> bool:
+        """
+        Checks nodes are peer connected with timeout.
+        Args:
+            node: node on which cmd has to be executed.
+            servers (str|list): A server|List of server hosts on which peer
+                status has to be checked.
+            wait_timeout: timeout to retry connected status check in node.
+        Returns:
+            bool : True if all the peers are connected.
+                   False otherwise.
+        """
+        if not isinstance(servers, list):
+            servers = [servers]
+
+        count = 0
+        while count <= wait_timeout:
+            ret = self.is_peer_connected(node, servers)
+            if ret:
+                return True
+            sleep(1)
+            count += 1
+        self.logger.error(f"Peers are not in connected state: {servers}")
+        return False
